@@ -1,16 +1,15 @@
 ---
-name: qwen38vision
+name: claude-qwen-vision
 description: >
-  Handles images in the conversation by converting them to text with qwen3.8-max from mytokens
-  (Anthropic-compatible endpoint), so the answer can proceed even when the session model cannot
-  see images (e.g. DeepSeek). Use when the user's message contains an image — pasted into the
-  terminal (the [Image #N] placeholder) or an image file path — and asks to 看图/读图/识别截图/
-  读出图里的文字/这个报错是什么 (带图)/analyze or describe this image. Run scripts/check_vision.py
-  first: if it says VISION the model can see the image directly and this skill is not needed;
-  if user_prompt_hook is installed, pasted images are already described automatically — skip.
+  Handles images the session model cannot see (e.g. DeepSeek): when the user's message contains
+  an image — pasted into the terminal (the [Image #N] placeholder) or an image file path — convert
+  it to text with qwen3.8-max via scripts/qwen_vision.py (mytokens, Anthropic-compatible) and
+  answer from that text instead of trying to view the image directly. Triggers — 用户贴图/截图/
+  paste an image, 「看下这张图」「读出图里的文字」「图片在 xxx.png」/analyze or describe this image.
+  If user_prompt_hook is installed, pasted images arrive already described — skip.
 ---
 
-# qwen38vision — 给看不到图的模型补上视觉
+# claude-qwen-vision — 给看不到图的模型补上视觉
 
 DeepSeek 等模型收不到/读不懂图片。本 skill 用 mytokens 里的 `qwen` profile
 （qwen3.8-max，阿里云百炼 Anthropic 兼容端点）把图片转成文本，模型基于文本继续推理。
@@ -38,12 +37,12 @@ DeepSeek 等模型收不到/读不懂图片。本 skill 用 mytokens 里的 `qwe
      --prompt "<用户真正想问的问题，例如：这张截图里的报错是什么？逐字读出报错信息>"
    ```
    多张图一次传入（各图之间用 `图1：` `图2：` 分隔说明）。
-3. 图片是粘贴的：若 hook 已装，模型输入里已有 `【qwen38vision】…` 注入文本，
+3. 图片是粘贴的：若 hook 已装，模型输入里已有 `【claude-qwen-vision】…` 注入文本，
    把它当作图片真实内容直接回答；没装 hook 就让用户提供文件路径。
 4. 把 qwen 输出的文本当作图片的真实内容来回答用户的问题——**不要再说「我看不到图片」**。
    回答里引用图的内容时，说明是「根据图片内容」即可。
 
-## 脚本（skills/qwen38vision/scripts/）
+## 脚本（skills/claude-qwen-vision/scripts/）
 
 | 脚本 | 作用 | 用法 |
 |---|---|---|

@@ -110,7 +110,7 @@ def main() -> None:
 
         desc = qwen_vision.call_qwen(blocks, DESCRIBE_PROMPT, None)
         context = (
-            "【qwen38vision】用户消息里附了一张图片，但当前会话模型不支持视觉、看不到图。"
+            "【claude-qwen-vision】用户消息里附了一张图片，但当前会话模型不支持视觉、看不到图。"
             "以下是对图片的文字描述（用 qwen3.8-max 生成），请把它当作图片的真实内容来理解并回答用户的问题：\n\n"
             + desc
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-hook.sh — 把 qwen38vision 的 UserPromptSubmit hook 合并进 settings.json。
+# install-hook.sh — 把 claude-qwen-vision 的 UserPromptSubmit hook 合并进 settings.json。
 #
 # 作用：用户 ⌘V 粘贴图片时，自动用 qwen3.8-max 把图转成文字描述注入会话，
 #       DeepSeek 等无视觉模型就能"看到"图。重复运行幂等，改前备份。

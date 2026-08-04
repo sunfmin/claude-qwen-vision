@@ -41,7 +41,7 @@ BLIND_MARKERS = (
 
 def cache_path(base: str, model: str) -> str:
     key = hashlib.sha256(f"{base}|{model}".encode()).hexdigest()[:16]
-    return os.path.join(os.environ.get("TMPDIR", "/tmp"), f"qwen38vision_vision_{key}")
+    return os.path.join(os.environ.get("TMPDIR", "/tmp"), f"claude_qwen_vision_{key}")
 
 
 def env_or_none(name: str) -> str | None:
