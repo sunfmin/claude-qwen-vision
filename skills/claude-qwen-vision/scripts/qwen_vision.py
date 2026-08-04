@@ -43,7 +43,7 @@ def fail(msg: str) -> None:
 
 def mytokens_get(field: str, account: str | None) -> str:
     if shutil.which("mytokens") is None:
-        fail("找不到 mytokens CLI——先 `uv tool install mytokens` 并配置 qwen profile")
+        fail("找不到 mytokens CLI——先 `npx skills add sunfmin/mytokens -g` 安装并配置 qwen profile")
     cmd = ["mytokens", "get", "qwen"]
     if account:
         cmd += ["--account", account]
