@@ -21,6 +21,19 @@ bash ~/.claude/skills/claude-qwen-vision/scripts/install-hook.sh   # 可选：�
 
 前置：`mytokens` CLI + `qwen` profile（`ANTHROPIC_BASE_URL/MODEL/AUTH_TOKEN`），`uv`。
 
+## 用法
+
+`qwen_vision.py` 是**自包含**脚本（PEP 723 内嵌元数据，零第三方依赖），从任意 cwd 直接执行，
+不需要 cd 进脚本目录：
+
+```sh
+uv run --no-project ~/.claude/skills/claude-qwen-vision/scripts/qwen_vision.py \
+  /path/to/image.png [更多路径...] --prompt "让 qwen 看图的指令"
+```
+
+**输出保证**：成功时 stdout 必有内容；qwen 返回空文本 / 响应被截断（`max_tokens=8192` 上限告警）/
+文件或网络出错，一律向 stderr 报错并以非零码退出，绝不静默输出空行。`--account paygo` 切按量付费。
+
 ## 限制
 
 - 端点直接 400（NO_VISION_HARD）的模型：粘贴的图整轮失败，hook 救不了，只能走文件路径。

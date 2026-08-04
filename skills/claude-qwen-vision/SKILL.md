@@ -25,14 +25,18 @@ description: >
 ## 步骤
 
 1. 确认用户消息里有图，且模型是盲的（上面分支表）。
-2. 跑脚本把图转成文本：
+2. 跑脚本把图转成文本——**脚本是自包含的，从任意 cwd 都能跑，不需要 cd 进脚本目录**：
 
    ```bash
-   uv run --quiet --no-project scripts/qwen_vision.py /path/to/image.png [更多路径...] \
+   uv run --no-project ~/.claude/skills/claude-qwen-vision/scripts/qwen_vision.py \
+     /path/to/image.png [更多路径...] \
      --prompt "<用户真正想问的问题，例如：这张截图里的报错是什么？逐字读出报错信息>"
    ```
 
    多张图一次传入，输出按 `图1：` `图2：` 分段。
+
+   **输出保证**：成功时 stdout 一定有内容；qwen 返回空文本、响应被截断、文件或网络出错，脚本都
+   向 stderr 报错并以非零码退出——不会静默输出空行。遇到「没内容」的返回请按 stderr 的提示重试。
 3. 以 qwen 的文本输出为图片的真实内容，直接、完整地回答用户的问题。
 
 **完成标准**：回答建立在 qwen 的文本输出之上（不再有「看不到图」这类话），用户的问题
