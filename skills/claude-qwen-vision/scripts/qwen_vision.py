@@ -10,12 +10,13 @@
 脚本所在目录，也不依赖仓库里任何其他文件。
 
 用法：
-  1. 图片文件路径:    qwen_vision.py /path/to/image.png [更多路径...] [--prompt "…"]
-  2. base64 输入:      qwen_vision.py --base64 <data> --media-type image/png [--prompt "…"]
+  1. 图片文件路径:    qwen_vision.py /path/to/image.png [更多路径...] [--prompt "…"] [--max-tokens N]
+  2. base64 输入:      qwen_vision.py --base64 <data> --media-type image/png [--prompt "…"] [--max-tokens N]
 
 凭证从 mytokens 的 qwen profile 读取（ANTHROPIC_BASE_URL / ANTHROPIC_MODEL /
 ANTHROPIC_AUTH_TOKEN），绝不硬编码、绝不打印。默认走 token-plan 账号，可
---account paygo 切按量付费。响应中的 thinking 块会被丢弃，只输出最终文本。
+--account paygo 切按量付费。请求显式关掉 thinking（该网关上思考无上界、
+会吃光输出预算），只输出最终文本。
 
 输出保证：成功时 stdout 一定有内容；qwen 返回空文本 / 响应被截断 / 网络
 或文件出错，一律向 stderr 报错并以非零码退出，绝不静默输出空行。
@@ -31,8 +32,11 @@ import urllib.error
 import urllib.request
 
 DEFAULT_PROMPT = "Describe this image in detail, including any text visible in it."
-# 多张大图 + 长输出时 2048 不够（会整段截断）。qwen3.8-max 支持 8192。
-MAX_TOKENS = 8192
+# max_tokens 是端点必填参数（省略直接 400），实测接受 ≥524288，默认给足余量，
+# 可用 --max-tokens 覆盖。注意：token-plan 网关上 qwen3.8-max 的 thinking 无上界，
+# 会吃光整个输出预算（实测 8192 全被 thinking 占掉、text 一个 token 都不剩），
+# 因此 payload 里显式关掉 thinking（见 call_qwen）。
+MAX_TOKENS = 131072
 REQUEST_TIMEOUT = 300  # 秒；多图时上传与生成都慢，留足余量
 
 
@@ -71,13 +75,17 @@ def image_block_from_file(path: str) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": media_type_for(path), "data": data}}
 
 
-def call_qwen(image_blocks: list[dict], prompt: str, account: str | None) -> str:
+def call_qwen(image_blocks: list[dict], prompt: str, account: str | None, max_tokens: int) -> str:
     base = mytokens_get("ANTHROPIC_BASE_URL", account)
     model = mytokens_get("ANTHROPIC_MODEL", account)
     token = mytokens_get("ANTHROPIC_AUTH_TOKEN", account)
     payload = {
         "model": model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
+        # 订阅网关上 qwen3.8-max 的 thinking 无上界：一段思考就能吃满整个
+        # max_tokens，text 一个 token 都不剩。显式关掉后输出立即可用
+        # （实测 stop_reason=end_turn、无 thinking 块）。
+        "thinking": {"type": "disabled"},
         "messages": [{"role": "user", "content": image_blocks + [{"type": "text", "text": prompt}]}],
     }
     req = urllib.request.Request(
@@ -108,7 +116,7 @@ def call_qwen(image_blocks: list[dict], prompt: str, account: str | None) -> str
     stop = data.get("stop_reason")
     if stop == "max_tokens":
         out += (
-            f"\n\n[注意：响应达到 max_tokens={MAX_TOKENS} 上限被截断，"
+            f"\n\n[注意：响应达到 max_tokens={max_tokens} 上限被截断，"
             f"图片内容可能没读完，请拆成单图重跑]"
         )
     return out
@@ -121,6 +129,8 @@ def main() -> None:
     ap.add_argument("--media-type", default="image/png", help="base64 输入的媒体类型")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, help="让 qwen 看图的指令")
     ap.add_argument("--account", help="mytokens qwen profile 账号（默认 qwen，可传 paygo）")
+    ap.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
+                    help=f"输出 token 上限（含 thinking，默认 {MAX_TOKENS}；端点实测接受 ≥524288）")
     args = ap.parse_args()
 
     blocks = []
@@ -131,7 +141,7 @@ def main() -> None:
     if not blocks:
         ap.error("至少要给一个图片路径或 --base64")
 
-    print(call_qwen(blocks, args.prompt, args.account))
+    print(call_qwen(blocks, args.prompt, args.account, args.max_tokens))
 
 
 if __name__ == "__main__":

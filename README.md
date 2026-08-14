@@ -31,8 +31,13 @@ uv run --no-project ~/.claude/skills/claude-qwen-vision/scripts/qwen_vision.py \
   /path/to/image.png [更多路径...] --prompt "让 qwen 看图的指令"
 ```
 
-**输出保证**：成功时 stdout 必有内容；qwen 返回空文本 / 响应被截断（`max_tokens=8192` 上限告警）/
+**输出保证**：成功时 stdout 必有内容；qwen 返回空文本 / 响应被截断（`max_tokens` 上限告警）/
 文件或网络出错，一律向 stderr 报错并以非零码退出，绝不静默输出空行。`--account paygo` 切按量付费。
+
+**输出上限**：默认 `--max-tokens 131072`，可用 `--max-tokens N` 继续放大（该参数 API 端
+必填、实测接受 ≥524288；只是上限，实际按生成量计费）。请求中显式关掉 thinking——
+token-plan 网关上 qwen3.8-max 的 thinking 无上界，会吃光整个输出预算
+（实测 8192 全被 thinking 占掉、text 一个 token 都不剩）。
 
 ## 限制
 
