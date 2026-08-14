@@ -10,8 +10,8 @@
 脚本所在目录，也不依赖仓库里任何其他文件。
 
 用法：
-  1. 图片文件路径:    qwen_vision.py /path/to/image.png [更多路径...] [--prompt "…"]
-  2. base64 输入:      qwen_vision.py --base64 <data> --media-type image/png [--prompt "…"]
+  1. 图片文件路径:    qwen_vision.py /path/to/image.png [更多路径...] [--prompt "…"] [--max-tokens N]
+  2. base64 输入:      qwen_vision.py --base64 <data> --media-type image/png [--prompt "…"] [--max-tokens N]
 
 凭证从 mytokens 的 qwen profile 读取（ANTHROPIC_BASE_URL / ANTHROPIC_MODEL /
 ANTHROPIC_AUTH_TOKEN），绝不硬编码、绝不打印。默认走 token-plan 账号，可
@@ -31,8 +31,9 @@ import urllib.error
 import urllib.request
 
 DEFAULT_PROMPT = "Describe this image in detail, including any text visible in it."
-# 多张大图 + 长输出时 2048 不够（会整段截断）。qwen3.8-max 支持 8192。
-MAX_TOKENS = 8192
+# 输出上限（含 thinking）：8192 时 thinking 吃满后正文会被截断。实测端点接受
+# ≥524288；默认给 131072 留足余量，可用 --max-tokens 覆盖。
+MAX_TOKENS = 131072
 REQUEST_TIMEOUT = 300  # 秒；多图时上传与生成都慢，留足余量
 
 
@@ -71,13 +72,13 @@ def image_block_from_file(path: str) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": media_type_for(path), "data": data}}
 
 
-def call_qwen(image_blocks: list[dict], prompt: str, account: str | None) -> str:
+def call_qwen(image_blocks: list[dict], prompt: str, account: str | None, max_tokens: int) -> str:
     base = mytokens_get("ANTHROPIC_BASE_URL", account)
     model = mytokens_get("ANTHROPIC_MODEL", account)
     token = mytokens_get("ANTHROPIC_AUTH_TOKEN", account)
     payload = {
         "model": model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": image_blocks + [{"type": "text", "text": prompt}]}],
     }
     req = urllib.request.Request(
@@ -108,7 +109,7 @@ def call_qwen(image_blocks: list[dict], prompt: str, account: str | None) -> str
     stop = data.get("stop_reason")
     if stop == "max_tokens":
         out += (
-            f"\n\n[注意：响应达到 max_tokens={MAX_TOKENS} 上限被截断，"
+            f"\n\n[注意：响应达到 max_tokens={max_tokens} 上限被截断，"
             f"图片内容可能没读完，请拆成单图重跑]"
         )
     return out
@@ -121,6 +122,8 @@ def main() -> None:
     ap.add_argument("--media-type", default="image/png", help="base64 输入的媒体类型")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, help="让 qwen 看图的指令")
     ap.add_argument("--account", help="mytokens qwen profile 账号（默认 qwen，可传 paygo）")
+    ap.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
+                    help=f"输出 token 上限（含 thinking，默认 {MAX_TOKENS}；端点实测接受 ≥524288）")
     args = ap.parse_args()
 
     blocks = []
@@ -131,7 +134,7 @@ def main() -> None:
     if not blocks:
         ap.error("至少要给一个图片路径或 --base64")
 
-    print(call_qwen(blocks, args.prompt, args.account))
+    print(call_qwen(blocks, args.prompt, args.account, args.max_tokens))
 
 
 if __name__ == "__main__":
