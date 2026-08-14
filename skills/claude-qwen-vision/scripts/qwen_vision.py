@@ -3,11 +3,12 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""qwen_vision — 把图片交给 qwen3.8-max 理解，输出文本描述。
+"""qwen_vision — 把图片交给 qwen3.8-max 理解，输出文本描述；在线不可用时自动回退本地模型。
 
 自包含脚本：只用标准库（dependencies 为空），从任意 cwd 直接
 `uv run --no-project /绝对/路径/qwen_vision.py …` 即可执行，不需要 cd 到
-脚本所在目录，也不依赖仓库里任何其他文件。
+脚本所在目录，也不依赖仓库里任何其他文件（本地回退会调用同目录下的
+qwen_vision_local.py，缺失时明确报错）。
 
 用法：
   1. 图片文件路径:    qwen_vision.py /path/to/image.png [更多路径...] [--prompt "…"] [--max-tokens N]
@@ -18,18 +19,26 @@ ANTHROPIC_AUTH_TOKEN），绝不硬编码、绝不打印。默认走 token-plan 
 --account paygo 切按量付费。请求显式关掉 thinking（该网关上思考无上界、
 会吃光输出预算），只输出最终文本。
 
-输出保证：成功时 stdout 一定有内容；qwen 返回空文本 / 响应被截断 / 网络
-或文件出错，一律向 stderr 报错并以非零码退出，绝不静默输出空行。
+在线回退：mytokens 缺失、凭证读取失败、网络错误或 qwen 返回空文本，一律
+自动改跑本地 Qwen3-VL（MLX，模型在 HF cache 里，离线可用）。回退过程写
+stderr，stdout 保持只有图片描述。--no-local-fallback 关闭回退，--local-model
+选本地模型（默认 30b）。
+
+输出保证：成功时 stdout 一定有内容；文件出错、回退也被关闭、或本地模型也
+失败，才向 stderr 报错并以非零码退出——绝不静默输出空行。
 """
 import argparse
 import base64
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 DEFAULT_PROMPT = "Describe this image in detail, including any text visible in it."
 # max_tokens 是端点必填参数（省略直接 400），实测接受 ≥524288，默认给足余量，
@@ -40,6 +49,10 @@ MAX_TOKENS = 131072
 REQUEST_TIMEOUT = 300  # 秒；多图时上传与生成都慢，留足余量
 
 
+class OnlineUnavailable(RuntimeError):
+    """在线 qwen 服务不可用（凭证、网络、空响应都算），触发本地回退。"""
+
+
 def fail(msg: str) -> None:
     print(f"qwen_vision: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -47,17 +60,21 @@ def fail(msg: str) -> None:
 
 def mytokens_get(field: str, account: str | None) -> str:
     if shutil.which("mytokens") is None:
-        fail("找不到 mytokens CLI——先 `npx skills add sunfmin/mytokens -g` 安装并配置 qwen profile")
+        raise OnlineUnavailable(
+            "找不到 mytokens CLI——先 `npx skills add sunfmin/mytokens -g` 安装并配置 qwen profile"
+        )
     cmd = ["mytokens", "get", "qwen"]
     if account:
         cmd += ["--account", account]
     cmd += ["--field", field]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        fail(f"mytokens get qwen --field {field} 失败: {r.stderr.strip() or 'secret 不存在'}")
+        raise OnlineUnavailable(
+            f"mytokens get qwen --field {field} 失败: {r.stderr.strip() or 'secret 不存在'}"
+        )
     out = r.stdout.strip()
     if not out:
-        fail(f"mytokens get qwen --field {field} 返回空——qwen profile 没配这个字段")
+        raise OnlineUnavailable(f"mytokens get qwen --field {field} 返回空——qwen profile 没配这个字段")
     return out
 
 
@@ -102,16 +119,16 @@ def call_qwen(image_blocks: list[dict], prompt: str, account: str | None, max_to
             data = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
-        fail(f"qwen API 错误 {e.code}: {body[:500]}")
+        raise OnlineUnavailable(f"qwen API 错误 {e.code}: {body[:500]}")
     except urllib.error.URLError as e:
-        fail(f"qwen API 请求失败: {e.reason}")
+        raise OnlineUnavailable(f"qwen API 请求失败: {e.reason}")
 
     content = data.get("content") or []
     texts = [b.get("text", "") for b in content if b.get("type") == "text"]
     out = "\n".join(t for t in texts if t).strip()
     if not out:
         kinds = ",".join(sorted({b.get("type", "?") for b in content})) or "空"
-        fail(f"qwen 返回了空文本（content 块类型: {kinds}）——模型没吐出任何内容，请重试或换 --account")
+        raise OnlineUnavailable(f"qwen 返回了空文本（content 块类型: {kinds}）——模型没吐出任何内容")
 
     stop = data.get("stop_reason")
     if stop == "max_tokens":
@@ -122,8 +139,40 @@ def call_qwen(image_blocks: list[dict], prompt: str, account: str | None, max_to
     return out
 
 
+LOCAL_MODELS = ("30b", "8b")
+
+
+def run_local_fallback(args, reason: str) -> str:
+    """在线失败时改跑同目录下的 qwen_vision_local.py，返回其 stdout。"""
+    if shutil.which("uv") is None:
+        fail("本地回退需要 uv（uv run 执行 qwen_vision_local.py），但 PATH 里找不到 uv")
+    local_script = Path(__file__).resolve().parent / "qwen_vision_local.py"
+    if not local_script.is_file():
+        fail(f"本地回退脚本缺失: {local_script}——请补上同目录的 qwen_vision_local.py")
+
+    paths = [str(Path(p).resolve()) for p in args.paths]
+    if args.base64:  # 本地脚本只收文件路径，base64 落盘到临时文件
+        suffix = mimetypes.guess_extension(args.media_type) or ".png"
+        with tempfile.NamedTemporaryFile(prefix="qwen_vision_", suffix=suffix, delete=False) as f:
+            f.write(base64.b64decode(args.base64))
+            paths.append(f.name)
+
+    print(f"qwen_vision: 在线服务不可用（{reason}），改用本地模型 Qwen3-VL…", file=sys.stderr)
+    cmd = ["uv", "run", "--no-project", str(local_script), *paths, "--prompt", args.prompt,
+           "--model", args.local_model]
+    if args.max_tokens != MAX_TOKENS:  # 用户显式设了上限才转发；在线默认值对本地模型不适用
+        cmd += ["--max-tokens", str(args.max_tokens)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        fail(f"本地模型回退失败: {r.stderr.strip() or r.stdout.strip() or '未知错误'}")
+    out = r.stdout.strip()
+    if not out:
+        fail("本地模型回退返回空文本")
+    return out
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="用 qwen3.8-max 理解图片，输出文本（凭证来自 mytokens）")
+    ap = argparse.ArgumentParser(description="用 qwen3.8-max 理解图片，输出文本（凭证来自 mytokens，在线不可用时回退本地模型）")
     ap.add_argument("paths", nargs="*", help="图片文件路径（可多个，相对路径按当前 cwd 解析）")
     ap.add_argument("--base64", help="直接传 base64 图片数据（配合 --media-type）")
     ap.add_argument("--media-type", default="image/png", help="base64 输入的媒体类型")
@@ -131,6 +180,10 @@ def main() -> None:
     ap.add_argument("--account", help="mytokens qwen profile 账号（默认 qwen，可传 paygo）")
     ap.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
                     help=f"输出 token 上限（含 thinking，默认 {MAX_TOKENS}；端点实测接受 ≥524288）")
+    ap.add_argument("--no-local-fallback", action="store_true",
+                    help="在线不可用时直接报错退出，不跑本地模型")
+    ap.add_argument("--local-model", choices=LOCAL_MODELS, default="30b",
+                    help=f"本地回退用哪个模型（默认 30b；30b 质量好，8b 加载快）")
     args = ap.parse_args()
 
     blocks = []
@@ -141,7 +194,13 @@ def main() -> None:
     if not blocks:
         ap.error("至少要给一个图片路径或 --base64")
 
-    print(call_qwen(blocks, args.prompt, args.account, args.max_tokens))
+    try:
+        out = call_qwen(blocks, args.prompt, args.account, args.max_tokens)
+    except OnlineUnavailable as e:
+        if args.no_local_fallback:
+            fail(str(e))
+        out = run_local_fallback(args, str(e))
+    print(out)
 
 
 if __name__ == "__main__":
